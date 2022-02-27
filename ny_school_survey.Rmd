@@ -1,0 +1,142 @@
+---
+title: "NY Schools Survey"
+author: "Lucia Barbone"
+date: "20/02/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup the data and analysis
+
+```{r, message = FALSE, warning = FALSE}
+library(readr)
+library(dplyr)
+library(stringr)
+library(purrr)
+library(tidyr)
+library(ggplot2)
+```
+
+The data is available online from the city of new york data website https://data.cityofnewyork.us/Education/2011-NYC-School-Survey/mnz3-dyi8
+
+The project aims to investigate the following questions:
+- Do student, teacher, and parent perceptions of NYC school quality appear to be related to demographic and academic success metrics?
+
+- Do students, teachers, and parents have similar perceptions of NYC school quality?
+
+
+```{r}
+# Load data
+schools_data <- read.csv("https://query.data.world/s/7p3r7a2xuevux73lpuu3w4h6xtz24v", header=TRUE, stringsAsFactors=FALSE)
+survey <- read_tsv("masterfile11_gened_final.txt")
+survey_d75 <- read_tsv("masterfile11_d75_final.txt")
+```
+
+## Data Cleaning
+
+Retain only high schools and variables that are relevant to the research question
+```{r}
+survey_select <- survey %>%
+  filter(schooltype == "High School") %>%
+  select(dbn:aca_tot_11)
+
+survey_d75_select <- survey_d75 %>%       
+  select(dbn:aca_tot_11)
+
+survey_total <- survey_select %>% 
+  bind_rows(survey_d75_select)
+```
+
+To be able to join datasets, we need to rename variables so they have the same name.
+Rename `survey_total` variable `dbn` to `DBN` so can use as key to join with the `combined` data frame.
+
+```{r}
+survey_total <- survey_total %>%
+  rename(DBN = dbn)
+```
+
+Join the datasets using left join to keep only data for schools in `combined`
+```{r}
+combined_survey <- schools_data %>%
+  left_join(survey_total, by = "DBN")
+```
+
+## Exploring data
+```{r}
+cor_mat <- combined_survey %>%    
+  select(avg_sat_score, saf_p_11:aca_tot_11) %>%
+  cor(use = "pairwise.complete.obs")
+
+cor_mat
+
+cor_tib <- cor_mat %>%
+  as_tibble(rownames = "variable")
+```
+
+Examine strong correlation (greater or smaller than 0.25 and -0.25)
+```{r}
+strong_cors <- cor_tib %>%
+  select(variable, avg_sat_score) %>%
+  filter(avg_sat_score > 0.25 | avg_sat_score < -0.25)  
+
+strong_cors
+```
+
+Examine relationships with scatter plots
+```{r}
+create_scatter <- function(x, y) {     
+  ggplot(data = combined_survey) + 
+    aes_string(x = x, y = y) +
+    geom_point(alpha = 0.3) +
+    theme(panel.background = element_rect(fill = "white"))
+}
+x_var <- strong_cors$variable[2:5]
+y_var <- "avg_sat_score"
+  
+map2(x_var, y_var, create_scatter)
+```
+There is a strong correlation between SAT scores and safety and respect scores by students and teachers (so not suprisingly also for the total combined scores), as well as SAT scores and academic expectations. So higher perceptions of safety and respect are observed in schools where average SAT scores are higher, and the same holds for schools where students have higher academic expectations. This is not a causal statement (as this is likely to be linked to a different factor influencing both), but it is still an interesting description.
+
+Data includes responses from three groups: parents, teachers, and students. Reshape data to investigate that.
+```{r}
+combined_survey_gather <- combined_survey %>%
+  pivot_longer(cols = saf_p_11:aca_tot_11,
+               names_to = "survey_question",
+               values_to = "score")
+```
+
+Create two variables to identify `response_group` and `question` from `survey question` variable
+```{r}
+combined_survey_gather <- combined_survey_gather %>%
+  mutate(response_group = str_sub(survey_question, 4, 6)) %>%   
+  mutate(question = str_sub(survey_question, 1, 3))
+```
+
+Code variables `response_group` and `question`
+```{r}
+combined_survey_gather <- combined_survey_gather %>%
+  mutate(response_group = ifelse(response_group  == "_p_", "parent", 
+                                ifelse(response_group == "_t_", "teacher",
+                                       ifelse(response_group == "_s_", "student", 
+                                              ifelse(response_group == "_to", "total", "NA")))))
+
+combined_survey_gather <- combined_survey_gather %>%
+  mutate(question = ifelse(question  == "saf", "safety_and_respect", 
+                                ifelse(question == "com", "communication_score",
+                                       ifelse(question == "aca", "academic_expectations_score", 
+                                              ifelse(question == "eng", "engagement_score", "NA")))))
+```
+
+Explore differences in responses by group
+```{r}
+combined_survey_gather %>%
+  filter(response_group != "total") %>%
+  ggplot(aes(x = question, y = score, fill = response_group)) +
+  geom_boxplot()
+```
+
+There is stark difference between parents' perceptions and students' scores. Parents tend to be much more optimistic about schools (in particular about safety and respect). It is also interesting to notice that students tend to have lower average scores than any other respondents' group. The only score demonstrating more convergence on score is academic expectations (which is quite high across the three groups). So perceptions of quality are different across the groups.
